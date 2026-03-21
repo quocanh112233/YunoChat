@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import Cookies from 'js-cookie';
 
 export type UserStatus = 'ONLINE' | 'OFFLINE' | 'AWAY' | 'BUSY';
 
@@ -27,18 +28,23 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       accessToken: null,
       isAuthenticated: false,
-      setAuth: (user, accessToken) =>
+      setAuth: (user, accessToken) => {
+        // Lưu vào cookie cho middleware (7 ngày)
+        Cookies.set('access_token', accessToken, { expires: 7, path: '/' });
         set({
           user,
           accessToken,
           isAuthenticated: true,
-        }),
-      clearAuth: () =>
+        });
+      },
+      clearAuth: () => {
+        Cookies.remove('access_token', { path: '/' });
         set({
           user: null,
           accessToken: null,
           isAuthenticated: false,
-        }),
+        });
+      },
     }),
     {
       name: 'auth-storage',
