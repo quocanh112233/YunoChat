@@ -1,0 +1,11 @@
+# Binaries
+/bin/
+# Environment variables
+.env
+.env.production
+# Dependencies
+/vendor/
+# IDEs
+.idea/
+.vscode/
+*.swp
