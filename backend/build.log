@@ -1,0 +1,10 @@
+# backend/internal/handler/http
+internal\handler\http\auth_handler.go:15:21: undefined: authuc.RegisterUseCase
+internal\handler\http\auth_handler.go:16:21: undefined: authuc.LoginUseCase
+internal\handler\http\auth_handler.go:17:21: undefined: authuc.RefreshTokenUseCase
+internal\handler\http\auth_handler.go:18:21: undefined: authuc.LogoutUseCase
+internal\handler\http\auth_handler.go:22:14: undefined: authuc.RegisterUseCase
+internal\handler\http\auth_handler.go:23:14: undefined: authuc.LoginUseCase
+internal\handler\http\auth_handler.go:24:14: undefined: authuc.RefreshTokenUseCase
+internal\handler\http\auth_handler.go:25:14: undefined: authuc.LogoutUseCase
+internal\handler\http\router.go:25:35: cfg.Server.AllowedOrigins undefined (type config.ServerConfig has no field or method AllowedOrigins)

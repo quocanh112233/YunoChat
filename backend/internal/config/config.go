@@ -15,8 +15,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port string `mapstructure:"PORT"`
-	Env  string `mapstructure:"ENV"`
+	Port           string   `mapstructure:"PORT"`
+	Env            string   `mapstructure:"ENV"`
+	AllowedOrigins []string `mapstructure:"CORS_ALLOWED_ORIGINS"`
 }
 
 type DatabaseConfig struct {
