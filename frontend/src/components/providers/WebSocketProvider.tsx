@@ -1,11 +1,11 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useRef, useCallback } from 'react';
-import { useAuthStore } from '@/store/auth';
+import { Message, MessageStatus, Conversation, Notification } from '@/types/api';
 import { useSocketStore } from '@/store/socket';
 import { useNotificationStore } from '@/store/notification';
+import { useAuthStore } from '@/store/auth';
 import { useQueryClient, InfiniteData } from '@tanstack/react-query';
-import { Message, Notification, MessageStatus } from '@/types/api';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/v1/ws';
 const RECONNECT_INITIAL_DELAY = 1000;
@@ -30,7 +30,6 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
   const reconnectDelayRef = useRef(RECONNECT_INITIAL_DELAY);
   const { accessToken, isAuthenticated, user } = useAuthStore();
   const { setConnected, setReconnecting, setTyping, removePendingMessage } = useSocketStore();
-  const { addNotification } = useNotificationStore();
   const queryClient = useQueryClient();
 
   // Use a ref for handleWsEvent to avoid it being a dependency of connect
@@ -102,13 +101,13 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
         break;
 
       case 'notification_new':
-        addNotification(payload as unknown as Notification);
+        useNotificationStore.getState().addNotification(payload as unknown as Notification);
         break;
 
       default:
         console.warn('Unhandled WS event type:', type);
     }
-  }, [queryClient, setTyping, addNotification, user?.id, removePendingMessage]);
+  }, [queryClient, setTyping, user?.id, removePendingMessage]);
 
 
   const connectRef = useRef<() => void | undefined>(undefined);
@@ -121,61 +120,66 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
 
     console.log('Attempting to connect to WebSocket...');
     const url = `${WS_URL}?token=${accessToken}`;
-    const socket = new WebSocket(url);
+    try {
+      const socket = new WebSocket(url);
 
-    socket.onopen = () => {
-      console.log('WebSocket connected');
-      setConnected(true);
-      setReconnecting(false);
-      reconnectDelayRef.current = RECONNECT_INITIAL_DELAY;
-      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      socket.onopen = () => {
+        console.log('WebSocket connected');
+        setConnected(true);
+        setReconnecting(false);
+        reconnectDelayRef.current = RECONNECT_INITIAL_DELAY;
+        queryClient.invalidateQueries({ queryKey: ['conversations'] });
 
-      // Flush message queue
-      if (messageQueueRef.current.length > 0) {
-        console.log(`Flushing ${messageQueueRef.current.length} queued messages...`);
-        messageQueueRef.current.forEach(msg => {
-          socket.send(JSON.stringify(msg));
-        });
-        messageQueueRef.current = [];
-      }
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (handleWsEventRef.current) {
-          handleWsEventRef.current(data);
+        // Flush message queue
+        if (messageQueueRef.current.length > 0) {
+          console.log(`Flushing ${messageQueueRef.current.length} queued messages...`);
+          messageQueueRef.current.forEach(msg => {
+            socket.send(JSON.stringify(msg));
+          });
+          messageQueueRef.current = [];
         }
-      } catch (err) {
-        console.error('Failed to parse WS message:', err);
-      }
-    };
+      };
 
-    socket.onclose = () => {
-      console.log('WebSocket disconnected');
-      setConnected(false);
-      socketRef.current = null;
-
-      const nextDelay = reconnectDelayRef.current;
-      reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, RECONNECT_MAX_DELAY);
-
-      if (isAuthenticated) {
-        setReconnecting(true);
-        console.log(`Reconnecting in ${nextDelay}ms...`);
-        setTimeout(() => {
-          if (useAuthStore.getState().isAuthenticated && connectRef.current) {
-            connectRef.current();
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (handleWsEventRef.current) {
+            handleWsEventRef.current(data);
           }
-        }, nextDelay);
-      }
-    };
+        } catch (err) {
+          console.error('Failed to parse WS message:', err);
+        }
+      };
 
-    socket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      socket.close();
-    };
+      socket.onclose = () => {
+        console.log('WebSocket disconnected');
+        setConnected(false);
+        socketRef.current = null;
 
-    socketRef.current = socket;
+        const nextDelay = reconnectDelayRef.current;
+        reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, RECONNECT_MAX_DELAY);
+
+        if (isAuthenticated) {
+          setReconnecting(true);
+          console.log(`Reconnecting in ${nextDelay}ms...`);
+          setTimeout(() => {
+            if (useAuthStore.getState().isAuthenticated && connectRef.current) {
+              connectRef.current();
+            }
+          }, nextDelay);
+        }
+      };
+
+      socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        socket.close();
+      };
+
+      socketRef.current = socket;
+    } catch (err) {
+      console.error('WebSocket connection error:', err);
+      setReconnecting(true);
+    }
   }, [accessToken, isAuthenticated, setConnected, setReconnecting, queryClient]);
 
   useEffect(() => {
@@ -197,7 +201,8 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(data));
     } else {
-      console.warn('WebSocket is not connected. Message not sent.', data);
+      console.log('WS not connected, queuing message:', data.type);
+      messageQueueRef.current.push(data);
     }
   }, []);
 

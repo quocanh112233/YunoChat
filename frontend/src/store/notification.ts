@@ -7,6 +7,8 @@ interface NotificationState {
   setUnreadCount: (count: number) => void;
   addNotification: (notification: Notification) => void;
   setNotifications: (notifications: Notification[]) => void;
+  markAsRead: (id: string) => void;
+  markAllAsRead: () => void;
 }
 
 export const useNotificationStore = create<NotificationState>((set) => ({
@@ -19,4 +21,16 @@ export const useNotificationStore = create<NotificationState>((set) => ({
       unreadCount: state.unreadCount + 1,
     })),
   setNotifications: (notifications) => set({ notifications }),
+  markAsRead: (id) =>
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.id === id ? { ...n, is_read: true } : n
+      ),
+      unreadCount: Math.max(0, state.unreadCount - 1),
+    })),
+  markAllAsRead: () =>
+    set((state) => ({
+      notifications: state.notifications.map((n) => ({ ...n, is_read: true })),
+      unreadCount: 0,
+    })),
 }));

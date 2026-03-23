@@ -15,6 +15,8 @@ func NewRouter(
 	userH *UserHandler,
 	convH *ConversationHandler,
 	msgH *MessageHandler,
+	friendH *FriendHandler,
+	notifH *NotificationHandler,
 	wsHandler *ws.Handler,
 ) *chi_v5.Mux {
 	r := chi_v5.NewRouter()
@@ -62,6 +64,12 @@ func NewRouter(
 
 			// Message endpoints
 			msgH.RegisterRoutes(r)
+
+			// Friend endpoints
+			friendH.RegisterRoutes(r)
+
+			// Notification endpoints
+			notifH.RegisterRoutes(r)
 		})
 	})
 

@@ -18,7 +18,9 @@ import (
 	"backend/internal/repository/sqlc"
 	authuc "backend/internal/usecase/auth"
 	convuc "backend/internal/usecase/conversation"
+	frienduc "backend/internal/usecase/friendship"
 	msguc "backend/internal/usecase/message"
+	notifuc "backend/internal/usecase/notification"
 )
 
 func main() {
@@ -42,6 +44,8 @@ func main() {
 	tokenRepo := postgres.NewRefreshTokenRepository(queries)
 	convRepo := postgres.NewConversationRepository(dbPool)
 	msgRepo := postgres.NewMessageRepository(dbPool)
+	friendRepo := postgres.NewFriendshipRepository(dbPool, queries)
+	notifRepo := postgres.NewNotificationRepository(dbPool, queries)
 
 	// 4. Shared Utils
 	customVal := validator.New()
@@ -62,6 +66,16 @@ func main() {
 	listMsgUC := msguc.NewListMessagesUseCase(convRepo, msgRepo)
 	softDeleteMsgUC := msguc.NewSoftDeleteUseCase(msgRepo)
 
+	// Friendship UseCases
+	sendReqUC := frienduc.NewSendRequestUseCase(friendRepo, userRepo, notifRepo)
+	respondReqUC := frienduc.NewRespondRequestUseCase(dbPool, friendRepo, convRepo, notifRepo, userRepo)
+	unfriendUC := frienduc.NewUnfriendUseCase(friendRepo)
+	listFriendUC := frienduc.NewListUseCase(friendRepo, userRepo)
+
+	// Notification UseCases
+	listNotifUC := notifuc.NewListUseCase(notifRepo)
+	markNotifReadUC := notifuc.NewMarkReadUseCase(notifRepo)
+
 	// 6. Init WebSocket Hub
 	hub := ws.NewHub(cfg.Database.ListenURL)
 	hub.Run()
@@ -71,10 +85,12 @@ func main() {
 	userHandler := router_http.NewUserHandler(userRepo)
 	convHandler := router_http.NewConversationHandler(listConvUC, createGroupUC, markReadUC)
 	msgHandler := router_http.NewMessageHandler(sendMsgUC, listMsgUC, softDeleteMsgUC)
+	friendHandler := router_http.NewFriendHandler(sendReqUC, respondReqUC, unfriendUC, listFriendUC)
+	notifHandler := router_http.NewNotificationHandler(listNotifUC, markNotifReadUC)
 	wsHandler := ws.NewHandler(hub, cfg)
 
 	// 8. Init Router
-	r := router_http.NewRouter(cfg, authHandler, userHandler, convHandler, msgHandler, wsHandler)
+	r := router_http.NewRouter(cfg, authHandler, userHandler, convHandler, msgHandler, friendHandler, notifHandler, wsHandler)
 
 	// 9. Start HTTP Server with Graceful Shutdown
 	srv := &http.Server{

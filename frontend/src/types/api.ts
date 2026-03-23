@@ -47,12 +47,33 @@ export interface Message {
   deleted_at?: string;
 }
 
+export type RelationshipStatus = 'STRANGER' | 'PENDING_SENT' | 'PENDING_RECEIVED' | 'FRIEND';
+
+export interface Friendship {
+  id: string;
+  requester_id: string;
+  addressee_id: string;
+  status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'BLOCKED';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FriendRequest {
+  id: string;
+  sender: User;
+  status: 'PENDING';
+  created_at: string;
+}
+
+export type NotificationType = 'FRIEND_REQUEST' | 'FRIEND_ACCEPTED' | 'NEW_MESSAGE';
+
 export interface Notification {
   id: string;
   recipient_id: string;
   actor_id: string;
-  type: string;
-  entity_id: string;
+  actor?: User; // Details of the person who triggered the notification
+  type: NotificationType;
+  entity_id: string; // ID of the related object (conversation_id, friendship_id, etc.)
   is_read: boolean;
   created_at: string;
 }
