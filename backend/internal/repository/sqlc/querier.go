@@ -11,14 +11,61 @@ import (
 )
 
 type Querier interface {
+	// SENT < DELIVERED < READ
+	// Tạo attachment record liên kết với message
+	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (Attachment, error)
+	// Tạo conversation mới (DM hoặc GROUP)
+	CreateConversation(ctx context.Context, arg CreateConversationParams) (CreateConversationRow, error)
+	// Tạo message mới (TEXT hoặc ATTACHMENT)
+	CreateMessage(ctx context.Context, arg CreateMessageParams) (CreateMessageRow, error)
+	// Thêm participant vào conversation
+	CreateParticipant(ctx context.Context, arg CreateParticipantParams) (CreateParticipantRow, error)
 	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (RefreshToken, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	// Tìm DM conversation giữa 2 users (dùng cho reuse khi re-friend)
+	FindDMConversation(ctx context.Context, arg FindDMConversationParams) (pgtype.UUID, error)
 	FindRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
 	FindUserByEmail(ctx context.Context, email string) (User, error)
 	FindUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	FindUserByUsername(ctx context.Context, username string) (User, error)
+	// Lấy chi tiết conversation theo ID
+	GetConversationByID(ctx context.Context, id pgtype.UUID) (GetConversationByIDRow, error)
+	// Lấy danh sách participants của conversation
+	GetConversationParticipants(ctx context.Context, conversationID pgtype.UUID) ([]GetConversationParticipantsRow, error)
+	// Kiểm tra status friendship giữa 2 users
+	GetFriendshipStatus(ctx context.Context, arg GetFriendshipStatusParams) (string, error)
+	// Lấy ID của tin nhắn mới nhất trong conversation
+	GetLatestMessageID(ctx context.Context, conversationID pgtype.UUID) (pgtype.UUID, error)
+	// Lấy message theo ID (không bao gồm deleted)
+	GetMessageByID(ctx context.Context, id pgtype.UUID) (GetMessageByIDRow, error)
+	// Đếm số tin nhắn chưa đọc trong conversation cho user cụ thể
+	GetUnreadCount(ctx context.Context, arg GetUnreadCountParams) (int64, error)
+	// Kiểm tra user có phải member của conversation không
+	IsConversationMember(ctx context.Context, arg IsConversationMemberParams) (bool, error)
+	// Kiểm tra user có phải admin của group không
+	IsGroupAdmin(ctx context.Context, arg IsGroupAdminParams) (bool, error)
+	// Lấy danh sách conversations của user với unread count và last message
+	// Sử dụng cursor pagination dựa trên last_activity_at
+	ListConversationsByUser(ctx context.Context, arg ListConversationsByUserParams) ([]ListConversationsByUserRow, error)
+	// Lấy danh sách messages với cursor pagination
+	// Sử dụng composite cursor (created_at, id) để đảm bảo deterministic ordering
+	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)
 	RevokeAllUserTokens(ctx context.Context, userID pgtype.UUID) error
 	RevokeRefreshToken(ctx context.Context, id pgtype.UUID) error
+	// Soft delete message: chỉ sender mới được xóa tin nhắn của mình
+	// Set deleted_at=NOW(), body=NULL (theo docs/7 phần 7)
+	SoftDeleteMessage(ctx context.Context, arg SoftDeleteMessageParams) (int64, error)
+	// Cập nhật tên hoặc avatar của conversation
+	UpdateConversation(ctx context.Context, arg UpdateConversationParams) (UpdateConversationRow, error)
+	// Cập nhật last_activity_at khi có hoạt động mới
+	UpdateLastActivity(ctx context.Context, id pgtype.UUID) error
+	// Cập nhật last_message_id sau khi gửi tin nhắn
+	UpdateLastMessage(ctx context.Context, arg UpdateLastMessageParams) error
+	// Cập nhật last_read_message_id và last_read_at
+	UpdateLastRead(ctx context.Context, arg UpdateLastReadParams) (UpdateLastReadRow, error)
+	// Cập nhật status của message (SENT -> DELIVERED -> READ)
+	// Chỉ dùng cho DM
+	UpdateMessageStatus(ctx context.Context, arg UpdateMessageStatusParams) error
 	UpdateUserStatus(ctx context.Context, arg UpdateUserStatusParams) error
 }
 

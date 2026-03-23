@@ -28,16 +28,22 @@ export interface Conversation {
   avatar_url?: string;
   last_message_id?: string;
   last_activity_at: string;
+  member_count?: number; // Added for group info
   created_at: string;
 }
 
+export type MessageStatus = 'SENDING' | 'SENT' | 'DELIVERED' | 'READ';
+
 export interface Message {
   id: string;
+  client_temp_id?: string; // For optimistic UI tracking
   conversation_id: string;
   sender_id: string;
   body?: string;
-  status: 'SENT' | 'DELIVERED' | 'READ';
+  type: 'TEXT' | 'FILE' | 'IMAGE';
+  status: MessageStatus;
   created_at: string;
+  updated_at: string;
   deleted_at?: string;
 }
 

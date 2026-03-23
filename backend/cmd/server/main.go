@@ -12,10 +12,13 @@ import (
 
 	"backend/internal/config"
 	router_http "backend/internal/handler/http"
+	"backend/internal/handler/ws"
 	"backend/internal/pkg/validator"
 	"backend/internal/repository/postgres"
 	"backend/internal/repository/sqlc"
 	authuc "backend/internal/usecase/auth"
+	convuc "backend/internal/usecase/conversation"
+	msguc "backend/internal/usecase/message"
 )
 
 func main() {
@@ -37,6 +40,8 @@ func main() {
 	queries := sqlc.New(dbPool)
 	userRepo := postgres.NewUserRepository(queries)
 	tokenRepo := postgres.NewRefreshTokenRepository(queries)
+	convRepo := postgres.NewConversationRepository(dbPool)
+	msgRepo := postgres.NewMessageRepository(dbPool)
 
 	// 4. Shared Utils
 	customVal := validator.New()
@@ -47,14 +52,31 @@ func main() {
 	refreshUC := authuc.NewRefreshTokenUseCase(tokenRepo, cfg)
 	logoutUC := authuc.NewLogoutUseCase(userRepo, tokenRepo)
 
-	// 6. Init Handlers
+	// Conversation UseCases
+	listConvUC := convuc.NewListConversationsUseCase(convRepo)
+	createGroupUC := convuc.NewCreateGroupUseCase(convRepo, dbPool)
+	markReadUC := convuc.NewMarkReadUseCase(convRepo, msgRepo)
+
+	// Message UseCases
+	sendMsgUC := msguc.NewSendMessageUseCase(convRepo, msgRepo, dbPool)
+	listMsgUC := msguc.NewListMessagesUseCase(convRepo, msgRepo)
+	softDeleteMsgUC := msguc.NewSoftDeleteUseCase(msgRepo)
+
+	// 6. Init WebSocket Hub
+	hub := ws.NewHub(cfg.Database.ListenURL)
+	hub.Run()
+
+	// 7. Init Handlers
 	authHandler := router_http.NewAuthHandler(registerUC, loginUC, refreshUC, logoutUC)
 	userHandler := router_http.NewUserHandler(userRepo)
+	convHandler := router_http.NewConversationHandler(listConvUC, createGroupUC, markReadUC)
+	msgHandler := router_http.NewMessageHandler(sendMsgUC, listMsgUC, softDeleteMsgUC)
+	wsHandler := ws.NewHandler(hub, cfg)
 
-	// 7. Init Router
-	r := router_http.NewRouter(cfg, authHandler, userHandler)
+	// 8. Init Router
+	r := router_http.NewRouter(cfg, authHandler, userHandler, convHandler, msgHandler, wsHandler)
 
-	// 8. Start HTTP Server with Graceful Shutdown
+	// 9. Start HTTP Server with Graceful Shutdown
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,
 		Handler: r,
@@ -79,8 +101,14 @@ func main() {
 	ctxShutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Shutdown HTTP server
 	if err := srv.Shutdown(ctxShutdown); err != nil {
-		log.Fatalf("Server Shutdown Failed: %v", err)
+		log.Printf("Server Shutdown Error: %v", err)
+	}
+
+	// Close WebSocket Hub (closes all connections and listenConn)
+	if err := hub.Close(); err != nil {
+		log.Printf("Hub Close Error: %v", err)
 	}
 
 	log.Println("Server exited properly")
