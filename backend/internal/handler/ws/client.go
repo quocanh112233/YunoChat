@@ -2,6 +2,7 @@ package ws
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
@@ -102,8 +103,8 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// The Hub closed the channel
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				// The Hub closed the channel, send close frame with message
+				c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"))
 				return
 			}
 
@@ -150,10 +151,8 @@ func (c *Client) handleMessage(data []byte) {
 		c.handleLeaveConversation(msg.Payload)
 	case EventSendMessage:
 		c.handleSendMessage(msg.Payload, msg.ID)
-	case EventTypingStart:
-		c.handleTypingStart(msg.Payload)
-	case EventTypingStop:
-		c.handleTypingStop(msg.Payload)
+	case EventTyping:
+		c.handleTyping(msg.Payload)
 	case EventMarkRead:
 		c.handleMarkRead(msg.Payload)
 	default:
@@ -202,7 +201,8 @@ func (c *Client) handleLeaveConversation(payload interface{}) {
 }
 
 // handleSendMessage processes send_message event
-func (c *Client) handleSendMessage(payload interface{}, msgID string) {
+// Validates membership (all types) and friendship (DM only) before accepting message
+func (c *Client) handleSendMessage(payload interface{}, _ string) {
 	data, _ := json.Marshal(payload)
 	var sendMsg SendMessagePayload
 	if err := json.Unmarshal(data, &sendMsg); err != nil {
@@ -210,14 +210,49 @@ func (c *Client) handleSendMessage(payload interface{}, msgID string) {
 		return
 	}
 
-	// TODO: Validate user is member of conversation
-	// TODO: Save message to DB via usecase
-	// TODO: Trigger pg_notify
+	if sendMsg.ConversationID == "" {
+		c.sendError("VALIDATION_ERROR", "conversation_id is required", EventSendMessage)
+		return
+	}
+
+	// Use a short-lived context for DB checks
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. Verify caller is a member of the conversation
+	if !c.hub.IsMember(ctx, sendMsg.ConversationID, c.userID) {
+		c.sendError("FORBIDDEN", "You are not a member of this conversation", EventSendMessage)
+		return
+	}
+
+	// 2. For DM conversations, also verify active friendship
+	// Query conversation type and the other participant
+	if c.hub.pool != nil {
+		var convType string
+		var otherUserID uuid.UUID
+		row := c.hub.pool.QueryRow(ctx,
+			`SELECT c.type, cp.user_id
+			 FROM conversations c
+			 JOIN conversation_participants cp ON cp.conversation_id = c.id
+			 WHERE c.id = $1
+			   AND cp.user_id != $2
+			   AND cp.left_at IS NULL
+			 LIMIT 1`,
+			sendMsg.ConversationID, c.userID,
+		)
+		if err := row.Scan(&convType, &otherUserID); err == nil && convType == "DM" {
+			// DM: check friendship status
+			if !c.hub.IsFriends(ctx, c.userID, otherUserID) {
+				c.sendError("FORBIDDEN", "Bạn không thể gửi tin nhắn cho người này", EventSendMessage)
+				return
+			}
+		}
+	}
 
 	// Send acknowledgment back to sender
 	ack := MessageSentPayload{
 		ClientTempID: sendMsg.ClientTempID,
-		MessageID:    "", // TODO: Return real message ID
+		MessageID:    "", // Full message persistence is handled by HTTP endpoint
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 		Status:       "SENT",
 	}
@@ -226,28 +261,15 @@ func (c *Client) handleSendMessage(payload interface{}, msgID string) {
 	log.Printf("User %s sent message to conversation %s", c.userID, sendMsg.ConversationID)
 }
 
-// handleTypingStart broadcasts typing indicator
-func (c *Client) handleTypingStart(payload interface{}) {
+// handleTyping broadcasts typing indicator
+func (c *Client) handleTyping(payload interface{}) {
 	data, _ := json.Marshal(payload)
-	var typing TypingStartPayload
+	var typing TypingPayload
 	if err := json.Unmarshal(data, &typing); err != nil {
 		return
 	}
 
-	// TODO: Broadcast to other participants
-	log.Printf("User %s started typing in conversation %s", c.userID, typing.ConversationID)
-}
-
-// handleTypingStop stops typing indicator
-func (c *Client) handleTypingStop(payload interface{}) {
-	data, _ := json.Marshal(payload)
-	var typing TypingStopPayload
-	if err := json.Unmarshal(data, &typing); err != nil {
-		return
-	}
-
-	// TODO: Broadcast to other participants
-	log.Printf("User %s stopped typing in conversation %s", c.userID, typing.ConversationID)
+	c.hub.handleTyping(c.userID.String(), typing.ConversationID, typing.IsTyping)
 }
 
 // handleMarkRead marks messages as read
@@ -259,9 +281,7 @@ func (c *Client) handleMarkRead(payload interface{}) {
 		return
 	}
 
-	// TODO: Update last_read_message_id in DB
-	// TODO: Broadcast read_receipt to sender
-	log.Printf("User %s marked read in conversation %s", c.userID, markRead.ConversationID)
+	c.hub.handleMarkRead(c.userID.String(), markRead.ConversationID)
 }
 
 // sendEvent sends an event to the client

@@ -16,6 +16,7 @@ type ConversationRepository interface {
 	ListConversationsByUser(ctx context.Context, userID pgtype.UUID, cursorTime *pgtype.Timestamptz, cursorID *pgtype.UUID, limit int32) ([]sqlc.ListConversationsByUserRow, error)
 	FindDMConversation(ctx context.Context, userA, userB pgtype.UUID) (pgtype.UUID, error)
 	GetConversationByID(ctx context.Context, id pgtype.UUID) (sqlc.GetConversationByIDRow, error)
+	GetConversationDetails(ctx context.Context, userID, conversationID pgtype.UUID) (sqlc.GetConversationDetailsRow, error)
 	GetConversationParticipants(ctx context.Context, conversationID pgtype.UUID) ([]sqlc.GetConversationParticipantsRow, error)
 	IsConversationMember(ctx context.Context, conversationID, userID pgtype.UUID) (bool, error)
 	IsGroupAdmin(ctx context.Context, conversationID, userID pgtype.UUID) (bool, error)
@@ -72,6 +73,14 @@ func (r *conversationRepository) FindDMConversation(ctx context.Context, userA, 
 // GetConversationByID implements ConversationRepository
 func (r *conversationRepository) GetConversationByID(ctx context.Context, id pgtype.UUID) (sqlc.GetConversationByIDRow, error) {
 	return r.queries.GetConversationByID(ctx, id)
+}
+
+// GetConversationDetails implements ConversationRepository
+func (r *conversationRepository) GetConversationDetails(ctx context.Context, userID, conversationID pgtype.UUID) (sqlc.GetConversationDetailsRow, error) {
+	return r.queries.GetConversationDetails(ctx, sqlc.GetConversationDetailsParams{
+		UserID: userID,
+		ID:     conversationID,
+	})
 }
 
 // GetConversationParticipants implements ConversationRepository

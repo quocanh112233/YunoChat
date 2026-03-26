@@ -8,13 +8,15 @@ import { cn } from '@/lib/utils';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import calendar from 'dayjs/plugin/calendar';
-import { Check, CheckCheck, Loader2, RefreshCw } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
-// @ts-expect-error - Fixed library type mismatch
-import { VariableSizeList } from 'react-window';
-// @ts-expect-error - Fixed library type mismatch
-import AutoSizer from 'react-virtualized-auto-sizer';
+import * as ReactWindow from 'react-window';
+import { AutoSizer } from 'react-virtualized-auto-sizer';
+
+const VariableSizeList = (ReactWindow as any).VariableSizeList || (ReactWindow as any).default?.VariableSizeList;
 import { useWebSocket } from '@/hooks/useWebSocket';
+import MessageBubble from './MessageBubble';
+import ImageLightbox from './ImageLightbox';
 
 dayjs.extend(calendar);
 dayjs.locale('vi');
@@ -27,9 +29,10 @@ export default function MessageList({ conversationId }: MessageListProps) {
   const { user } = useAuthStore();
   const { sendMessage } = useWebSocket();
   const queryClient = useQueryClient();
-  const listRef = useRef<VariableSizeList>(null);
+  const listRef = useRef<any>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
   // N2: Force re-render periodically to update 'isFailed' status (reactive timeout)
@@ -80,11 +83,11 @@ export default function MessageList({ conversationId }: MessageListProps) {
 
   const handleRetry = useCallback((msg: Message) => {
     const now = new Date().toISOString();
-    
+
     // N1: Update existing message in cache instead of creating duplicate
     queryClient.setQueryData<InfiniteData<Message[]>>(['messages', conversationId], (old) => {
       if (!old) return old;
-      const newPages = old.pages.map(page => 
+      const newPages = old.pages.map(page =>
         page.map(m => (m.client_temp_id === msg.client_temp_id || m.id === msg.id)
           ? { ...m, status: 'SENDING' as MessageStatus, created_at: now }
           : m
@@ -106,22 +109,22 @@ export default function MessageList({ conversationId }: MessageListProps) {
   const getItemSize = useCallback((index: number) => {
     const msg = allMessages[index];
     if (!msg) return 0;
-    
+
     // Heuristic for height calculation
     const lines = Math.ceil((msg.body?.length || 0) / 40) || 1;
     let height = lines * 24 + 40; // Base text height + padding/time
-    
+
     // Add space for date divider
     const prevMsg = allMessages[index - 1];
     if (!prevMsg || !dayjs(msg.created_at).isSame(dayjs(prevMsg.created_at), 'day')) {
       height += 60;
     }
-    
+
     // Add space for sender name
     if (msg.sender_id !== user?.id) {
       height += 20;
     }
-    
+
     return height;
   }, [allMessages, user?.id]);
 
@@ -145,14 +148,10 @@ export default function MessageList({ conversationId }: MessageListProps) {
     const isMe = msg.sender_id === user?.id;
     const prevMsg = allMessages[index - 1];
     const isSameDay = prevMsg && dayjs(msg.created_at).isSame(dayjs(prevMsg.created_at), 'day');
-    const isSending = msg.status === 'SENDING';
-    const isDeleted = !!msg.deleted_at;
-    
-    const isFailed = isSending && dayjs().diff(dayjs(msg.created_at), 'second') > 10;
 
     // Determine sender display name
-    const senderName = isMe 
-      ? 'Bạn' 
+    const senderName = isMe
+      ? 'Bạn'
       : conversation?.other_user?.display_name || `Người dùng ${msg.sender_id.slice(0, 4)}`;
 
     return (
@@ -170,70 +169,20 @@ export default function MessageList({ conversationId }: MessageListProps) {
           </div>
         )}
 
-        <div className={cn(
-          "flex flex-col group transition-all duration-300",
-          isMe ? "items-end" : "items-start"
-        )}>
-          {!isMe && (
-            <span className="text-[10px] text-slate-500 ml-2 mb-1">
-              {senderName}
-            </span>
-          )}
-
-          <div className="flex items-end gap-2 max-w-[85%] md:max-w-[70%]">
-            <div className={cn(
-              "flex-1 px-4 py-2.5 rounded-2xl text-sm relative transition-all duration-200 shadow-sm",
-              isMe 
-                ? "bg-indigo-600 text-white rounded-br-none hover:bg-indigo-500" 
-                : "bg-slate-700/90 text-slate-100 rounded-bl-none hover:bg-slate-700",
-              isSending && "opacity-60",
-              isDeleted && "italic text-slate-500 bg-slate-700/40 border border-dashed border-slate-600",
-              isFailed && "border-rose-500/50 border"
-            )}>
-              {isDeleted ? (
-                <p className="flex items-center gap-2">🚫 Tin nhắn đã bị xóa</p>
-              ) : (
-                <p className="whitespace-pre-wrap wrap-break-word leading-relaxed">{msg.body}</p>
-              )}
-              
-              <div className={cn(
-                "flex items-center gap-1 mt-1 text-[10px]",
-                isMe ? "text-indigo-200 justify-end" : "text-slate-400 justify-start"
-              )}>
-                <span>{dayjs(msg.created_at).format('HH:mm')}</span>
-                {isMe && (
-                  <span className="ml-0.5">
-                    {isSending && !isFailed ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : isFailed ? (
-                      <span className="text-rose-400 font-bold" title="Gửi thất bại">!</span>
-                    ) : msg.status === 'READ' ? (
-                      <CheckCheck className="w-3 h-3 text-indigo-300" />
-                    ) : (
-                      <Check className="w-3 h-3 text-slate-400" />
-                    )}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {isFailed && (
-              <button 
-                onClick={() => handleRetry(msg)}
-                className="mb-2 p-1.5 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white rounded-full transition-all border border-rose-500/20"
-                title="Thử lại"
-              >
-                <RefreshCw className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-        </div>
+        <MessageBubble
+          message={msg}
+          isMe={isMe}
+          senderName={senderName}
+          onRetry={handleRetry}
+          onImageClick={(url) => setSelectedImageUrl(url)}
+        />
       </div>
     );
   };
 
   return (
     <div className="flex-1 relative min-h-0">
+      {/* @ts-expect-error - Fixed library type mismatch */}
       <AutoSizer>
         {({ height, width }: { height: number; width: number }) => (
           <VariableSizeList
@@ -257,6 +206,11 @@ export default function MessageList({ conversationId }: MessageListProps) {
           </VariableSizeList>
         )}
       </AutoSizer>
+
+      <ImageLightbox
+        url={selectedImageUrl}
+        onClose={() => setSelectedImageUrl(null)}
+      />
     </div>
   );
 }

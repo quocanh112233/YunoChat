@@ -2,6 +2,7 @@ package friendship
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"backend/internal/domain/user"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var (
@@ -23,6 +25,7 @@ type SendRequestUseCase struct {
 	friendshipRepo   postgres.FriendshipRepository
 	userRepo         user.UserRepository
 	notificationRepo postgres.NotificationRepository
+	pool             *pgxpool.Pool
 }
 
 // NewSendRequestUseCase creates a new SendRequestUseCase
@@ -30,11 +33,13 @@ func NewSendRequestUseCase(
 	friendshipRepo postgres.FriendshipRepository,
 	userRepo user.UserRepository,
 	notificationRepo postgres.NotificationRepository,
+	pool *pgxpool.Pool,
 ) *SendRequestUseCase {
 	return &SendRequestUseCase{
 		friendshipRepo:   friendshipRepo,
 		userRepo:         userRepo,
 		notificationRepo: notificationRepo,
+		pool:             pool,
 	}
 }
 
@@ -92,14 +97,22 @@ func (uc *SendRequestUseCase) Execute(ctx context.Context, req SendRequestReques
 		"friendship",
 	)
 
+	// Broadcast via WS
+	payload := map[string]interface{}{
+		"type": "notification_new",
+		"data": map[string]interface{}{
+			"type":         "FRIEND_REQUEST",
+			"reference_id": pgToUUID(friendship.ID).String(),
+			"actor_id":     req.RequesterID.String(),
+		},
+		"recipient_ids": []string{req.AddresseeID.String()},
+	}
+	jsonPayload, _ := json.Marshal(payload)
+	_, _ = uc.pool.Exec(ctx, "SELECT pg_notify('chat_events', $1)", string(jsonPayload))
+
 	return &SendRequestResponse{
 		FriendshipID: pgToUUID(friendship.ID),
 		Status:       friendship.Status,
 		CreatedAt:    friendship.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
 	}, nil
-}
-
-// Helper to convert pgtype.UUID to uuid.UUID
-func pgToUUID(p pgtype.UUID) uuid.UUID {
-	return p.Bytes
 }

@@ -7,8 +7,7 @@ const (
 	EventJoinConversation  = "join_conversation"
 	EventLeaveConversation = "leave_conversation"
 	EventSendMessage       = "send_message"
-	EventTypingStart       = "typing_start"
-	EventTypingStop        = "typing_stop"
+	EventTyping            = "typing"
 	EventMarkRead          = "mark_read"
 
 	// Server -> Client events
@@ -57,14 +56,10 @@ type SendMessagePayload struct {
 	ClientTempID   string `json:"client_temp_id"` // for optimistic UI
 }
 
-// TypingStartPayload - start typing indicator
-type TypingStartPayload struct {
+// TypingPayload - typing indicator
+type TypingPayload struct {
 	ConversationID string `json:"conversation_id"`
-}
-
-// TypingStopPayload - stop typing indicator
-type TypingStopPayload struct {
-	ConversationID string `json:"conversation_id"`
+	IsTyping       bool   `json:"is_typing"`
 }
 
 // MarkReadPayload - mark messages as read

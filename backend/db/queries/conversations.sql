@@ -15,7 +15,7 @@ SELECT
     u_last.display_name AS last_message_sender_name,
     u_last.avatar_url AS last_message_sender_avatar,
     COUNT(m_unread.id) AS unread_count,
-    -- Thông tin other_user cho DM (sẽ được xử lý ở application layer)
+    -- Thông tin other_user cho DM
     CASE 
         WHEN c.type = 'DM' THEN (
             SELECT cp2.user_id 
@@ -25,7 +25,20 @@ SELECT
             AND cp2.left_at IS NULL
             LIMIT 1
         )
-    END AS other_user_id
+    END AS other_user_id,
+    -- Friendship status cho DM
+    CASE
+        WHEN c.type = 'DM' THEN (
+            SELECT f.status
+            FROM friendships f
+            WHERE (f.requester_id = $1 AND f.addressee_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            )) OR (f.addressee_id = $1 AND f.requester_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            ))
+            LIMIT 1
+        )
+    END AS friendship_status
 FROM conversation_participants cp
 JOIN conversations c ON c.id = cp.conversation_id
 LEFT JOIN messages m_last ON m_last.id = c.last_message_id
@@ -89,6 +102,49 @@ WHERE id = $1;
 SELECT c.id, c.type, c.name, c.avatar_url, c.last_activity_at, c.created_at
 FROM conversations c
 WHERE c.id = $1;
+
+-- name: GetConversationDetails :one
+-- Lấy chi tiết conversation với unread count và friendship status
+SELECT
+    c.id,
+    c.type,
+    c.name,
+    c.avatar_url,
+    c.last_activity_at,
+    COUNT(m_unread.id) AS unread_count,
+    -- Thông tin other_user cho DM
+    CASE 
+        WHEN c.type = 'DM' THEN (
+            SELECT cp2.user_id 
+            FROM conversation_participants cp2 
+            WHERE cp2.conversation_id = c.id 
+            AND cp2.user_id != $1 
+            AND cp2.left_at IS NULL
+            LIMIT 1
+        )
+    END AS other_user_id,
+    -- Friendship status cho DM
+    CASE
+        WHEN c.type = 'DM' THEN (
+            SELECT f.status
+            FROM friendships f
+            WHERE (f.requester_id = $1 AND f.addressee_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            )) OR (f.addressee_id = $1 AND f.requester_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            ))
+            LIMIT 1
+        )
+    END AS friendship_status
+FROM conversations c
+LEFT JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1
+LEFT JOIN messages m_unread ON 
+    m_unread.conversation_id = c.id
+    AND m_unread.deleted_at IS NULL
+    AND m_unread.sender_id != $1
+    AND m_unread.created_at > COALESCE(cp.last_read_at, '1970-01-01')
+WHERE c.id = $2
+GROUP BY c.id;
 
 -- name: GetConversationParticipants :many
 -- Lấy danh sách participants của conversation

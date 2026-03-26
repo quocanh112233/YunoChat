@@ -1,11 +1,12 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useRef, useCallback } from 'react';
-import { Message, MessageStatus, Conversation, Notification } from '@/types/api';
+import { Message, MessageStatus, Notification } from '@/types/api';
 import { useSocketStore } from '@/store/socket';
 import { useNotificationStore } from '@/store/notification';
 import { useAuthStore } from '@/store/auth';
 import { useQueryClient, InfiniteData } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/v1/ws';
 const RECONNECT_INITIAL_DELAY = 1000;
@@ -103,6 +104,32 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
       case 'notification_new':
         useNotificationStore.getState().addNotification(payload as unknown as Notification);
         break;
+
+      case 'member_removed': {
+        // When we are kicked or any member is removed, invalidate conversation list
+        // so the sidebar reflects the change automatically
+        const removedPayload = payload as { conversation_id: string; removed_user_id: string };
+        queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        queryClient.invalidateQueries({ queryKey: ['messages', removedPayload.conversation_id] });
+
+        // If current user is the one removed, redirect to home and show toast
+        if (removedPayload.removed_user_id === user?.id) {
+          toast.error('Bạn đã bị xóa khỏi cuộc trò chuyện');
+          window.location.href = '/conversations';
+        }
+        break;
+      }
+
+      case 'error': {
+        // Handle server-sent WS errors (e.g. FORBIDDEN when unfriended)
+        const errPayload = payload as { code: string; message: string; ref_event?: string };
+        if (errPayload.code === 'FORBIDDEN' && errPayload.ref_event === 'send_message') {
+          toast.error('Bạn không thể gửi tin nhắn cho người này');
+        } else {
+          console.warn('WS error event:', errPayload);
+        }
+        break;
+      }
 
       default:
         console.warn('Unhandled WS event type:', type);

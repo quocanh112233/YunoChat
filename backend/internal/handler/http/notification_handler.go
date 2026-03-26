@@ -70,9 +70,7 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OKWithMeta(w, http.StatusOK, resp.Notifications, &response.Meta{
-		HasMore: resp.Meta.HasMore,
-	})
+	response.OK(w, http.StatusOK, resp)
 }
 
 // GetUnreadCount handles GET /v1/notifications/unread-count

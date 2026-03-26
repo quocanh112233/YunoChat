@@ -14,28 +14,66 @@ import (
 // ConversationHandler handles conversation-related HTTP endpoints
 type ConversationHandler struct {
 	listUC        *convuc.ListConversationsUseCase
+	getUC         *convuc.GetConversationUseCase
 	createGroupUC *convuc.CreateGroupUseCase
 	markReadUC    *convuc.MarkReadUseCase
+	kickMemberUC  *convuc.KickMemberUseCase
 }
 
 // NewConversationHandler creates a new conversation handler
 func NewConversationHandler(
 	listUC *convuc.ListConversationsUseCase,
+	getUC *convuc.GetConversationUseCase,
 	createGroupUC *convuc.CreateGroupUseCase,
 	markReadUC *convuc.MarkReadUseCase,
+	kickMemberUC *convuc.KickMemberUseCase,
 ) *ConversationHandler {
 	return &ConversationHandler{
 		listUC:        listUC,
+		getUC:         getUC,
 		createGroupUC: createGroupUC,
 		markReadUC:    markReadUC,
+		kickMemberUC:  kickMemberUC,
 	}
 }
 
 // RegisterRoutes registers conversation routes
 func (h *ConversationHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/conversations", h.ListConversations)
+	r.Get("/conversations/{id}", h.GetConversation)
 	r.Post("/conversations/groups", h.CreateGroup)
 	r.Patch("/conversations/{id}/read", h.MarkAsRead)
+	r.Delete("/conversations/{id}/members/{user_id}", h.KickMember)
+}
+
+// GetConversation handles GET /v1/conversations/{id}
+func (h *ConversationHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok || userID == "" {
+		response.Err(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		return
+	}
+
+	conversationID := chi.URLParam(r, "id")
+	if conversationID == "" {
+		response.Err(w, http.StatusBadRequest, "MISSING_ID", "Conversation ID is required")
+		return
+	}
+
+	resp, err := h.getUC.Execute(r.Context(), convuc.GetConversationRequest{
+		UserID:         userID,
+		ConversationID: conversationID,
+	})
+	if err != nil {
+		if err == convuc.ErrConversationNotFound {
+			response.Err(w, http.StatusNotFound, "NOT_FOUND", "Conversation not found")
+			return
+		}
+		response.Err(w, http.StatusInternalServerError, "GET_FAILED", "Failed to get conversation details")
+		return
+	}
+
+	response.OK(w, http.StatusOK, resp)
 }
 
 // ListConversations handles GET /v1/conversations
@@ -187,4 +225,42 @@ func (h *ConversationHandler) MarkAsRead(w http.ResponseWriter, r *http.Request)
 		"last_read_message_id": resp.LastReadMessageID,
 		"read_at":              resp.ReadAt,
 	})
+}
+
+// KickMember handles DELETE /v1/conversations/{id}/members/{user_id}
+// Only group admins can kick other members.
+func (h *ConversationHandler) KickMember(w http.ResponseWriter, r *http.Request) {
+	callerID, ok := r.Context().Value("user_id").(string)
+	if !ok || callerID == "" {
+		response.Err(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		return
+	}
+
+	conversationID := chi.URLParam(r, "id")
+	targetUserID := chi.URLParam(r, "user_id")
+	if conversationID == "" || targetUserID == "" {
+		response.Err(w, http.StatusBadRequest, "MISSING_PARAMS", "Missing conversation or user ID")
+		return
+	}
+
+	err := h.kickMemberUC.Execute(r.Context(), convuc.KickMemberRequest{
+		CallerID:       callerID,
+		ConversationID: conversationID,
+		TargetUserID:   targetUserID,
+	})
+	if err != nil {
+		switch err {
+		case convuc.ErrNotAdmin:
+			response.Err(w, http.StatusForbidden, "NOT_ADMIN", "Only admin can kick members")
+		case convuc.ErrNotMember:
+			response.Err(w, http.StatusNotFound, "NOT_MEMBER", "User is not a member")
+		case convuc.ErrCannotSelf:
+			response.Err(w, http.StatusBadRequest, "CANNOT_KICK_SELF", "Cannot kick yourself")
+		default:
+			response.Err(w, http.StatusInternalServerError, "KICK_FAILED", "Failed to kick member")
+		}
+		return
+	}
+
+	response.OK(w, http.StatusOK, map[string]interface{}{"success": true})
 }

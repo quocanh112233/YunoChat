@@ -18,6 +18,7 @@ func NewRouter(
 	friendH *FriendHandler,
 	notifH *NotificationHandler,
 	wsHandler *ws.Handler,
+	uploadH *UploadHandler,
 ) *chi_v5.Mux {
 	r := chi_v5.NewRouter()
 
@@ -70,6 +71,9 @@ func NewRouter(
 
 			// Notification endpoints
 			notifH.RegisterRoutes(r)
+
+			// Upload endpoints
+			uploadH.RegisterRoutes(r)
 		})
 	})
 

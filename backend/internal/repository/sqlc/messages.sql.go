@@ -129,7 +129,7 @@ ORDER BY created_at DESC, id DESC
 LIMIT 1
 `
 
-// Lấy ID của tin nhắn mới nhất trong conversation
+// Lấy ID của tin nhắn mới nhất (không bao gồm deleted)
 func (q *Queries) GetLatestMessageID(ctx context.Context, conversationID pgtype.UUID) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, getLatestMessageID, conversationID)
 	var id pgtype.UUID
@@ -164,7 +164,7 @@ SELECT
 FROM messages m
 JOIN users u ON u.id = m.sender_id
 LEFT JOIN attachments a ON a.message_id = m.id
-WHERE m.id = $1 AND m.deleted_at IS NULL
+WHERE m.id = $1
 `
 
 type GetMessageByIDRow struct {
@@ -241,7 +241,7 @@ type GetUnreadCountParams struct {
 	SenderID       pgtype.UUID `json:"sender_id"`
 }
 
-// Đếm số tin nhắn chưa đọc trong conversation cho user cụ thể
+// Đếm số tin nhắn chưa đọc trong conversation (không bao gồm deleted)
 func (q *Queries) GetUnreadCount(ctx context.Context, arg GetUnreadCountParams) (int64, error) {
 	row := q.db.QueryRow(ctx, getUnreadCount, arg.ConversationID, arg.SenderID)
 	var count int64
@@ -278,7 +278,6 @@ FROM messages m
 JOIN users u ON u.id = m.sender_id
 LEFT JOIN attachments a ON a.message_id = m.id
 WHERE m.conversation_id = $1
-    AND m.deleted_at IS NULL
     AND (
         $2::timestamptz IS NULL OR $3::uuid IS NULL
         OR (m.created_at, m.id) < ($2, $3)

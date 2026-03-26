@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -102,6 +103,12 @@ func (uc *CreateGroupUseCase) Execute(ctx context.Context, req CreateGroupReques
 			return nil, err
 		}
 
+		// Constraint: Must be friends to add to group
+		status, err := uc.convRepo.GetFriendshipStatus(ctx, creatorID, participantID)
+		if err != nil || status != "ACCEPTED" {
+			return nil, errors.New("chỉ có thể thêm bạn bè vào nhóm")
+		}
+
 		participantUUID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
 		participant, err := uc.convRepo.CreateParticipant(ctx, tx, participantUUID, convID, participantID, "MEMBER")
 		if err != nil {
@@ -118,6 +125,22 @@ func (uc *CreateGroupUseCase) Execute(ctx context.Context, req CreateGroupReques
 	// Commit transaction
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
+	}
+
+	// Broadcast member_added event or GROUP_ADDED notification
+	// For simplicity, we trigger pg_notify for each added member
+	for _, p := range req.ParticipantIDs {
+		payload := map[string]interface{}{
+			"type": "notification_new",
+			"data": map[string]interface{}{
+				"type":            "GROUP_ADDED",
+				"conversation_id": uuid.UUID(convID.Bytes).String(),
+				"actor_id":        req.CreatorID,
+			},
+			"recipient_ids": []string{p},
+		}
+		jsonPayload, _ := json.Marshal(payload)
+		_, _ = uc.pool.Exec(ctx, "SELECT pg_notify('chat_events', $1)", string(jsonPayload))
 	}
 
 	return &CreateGroupResponse{

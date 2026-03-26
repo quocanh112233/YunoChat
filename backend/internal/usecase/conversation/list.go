@@ -19,15 +19,16 @@ var (
 
 // ConversationWithDetails represents a conversation with full details for API response
 type ConversationWithDetails struct {
-	ID             string                `json:"id"`
-	Type           string                `json:"type"`
-	Name           string                `json:"name,omitempty"`
-	AvatarURL      string                `json:"avatar_url,omitempty"`
-	LastActivityAt time.Time             `json:"last_activity_at"`
-	LastMessage    *LastMessageInfo      `json:"last_message,omitempty"`
-	UnreadCount    int64                 `json:"unread_count"`
-	OtherUser      *OtherUserInfo        `json:"other_user,omitempty"` // For DM only
-	Participants   []ParticipantInfo       `json:"participants,omitempty"`
+	ID               string                `json:"id"`
+	Type             string                `json:"type"`
+	Name             string                `json:"name,omitempty"`
+	AvatarURL        string                `json:"avatar_url,omitempty"`
+	LastActivityAt   time.Time             `json:"last_activity_at"`
+	LastMessage      *LastMessageInfo      `json:"last_message,omitempty"`
+	UnreadCount      int64                 `json:"unread_count"`
+	FriendshipStatus *string               `json:"friendship_status,omitempty"` // For DM only
+	OtherUser        *OtherUserInfo        `json:"other_user,omitempty"`        // For DM only
+	Participants     []ParticipantInfo     `json:"participants,omitempty"`
 }
 
 type LastMessageInfo struct {
@@ -177,6 +178,13 @@ func (uc *ListConversationsUseCase) convertToConversationWithDetails(row sqlc.Li
 	}
 	if row.AvatarUrl.Valid {
 		conv.AvatarURL = row.AvatarUrl.String
+	}
+
+	// Add friendship status if it's a DM
+	if conv.Type == "DM" {
+		if status, ok := row.FriendshipStatus.(string); ok {
+			conv.FriendshipStatus = &status
+		}
 	}
 
 	// Add last message info if exists

@@ -13,6 +13,8 @@ import (
 	"backend/internal/config"
 	router_http "backend/internal/handler/http"
 	"backend/internal/handler/ws"
+	"backend/internal/pkg/cloudinary"
+	"backend/internal/pkg/r2"
 	"backend/internal/pkg/validator"
 	"backend/internal/repository/postgres"
 	"backend/internal/repository/sqlc"
@@ -21,6 +23,7 @@ import (
 	frienduc "backend/internal/usecase/friendship"
 	msguc "backend/internal/usecase/message"
 	notifuc "backend/internal/usecase/notification"
+	uploaduc "backend/internal/usecase/upload"
 )
 
 func main() {
@@ -58,8 +61,10 @@ func main() {
 
 	// Conversation UseCases
 	listConvUC := convuc.NewListConversationsUseCase(convRepo)
+	getConvUC := convuc.NewGetConversationUseCase(convRepo)
 	createGroupUC := convuc.NewCreateGroupUseCase(convRepo, dbPool)
 	markReadUC := convuc.NewMarkReadUseCase(convRepo, msgRepo)
+	kickMemberUC := convuc.NewKickMemberUseCase(convRepo, dbPool)
 
 	// Message UseCases
 	sendMsgUC := msguc.NewSendMessageUseCase(convRepo, msgRepo, dbPool)
@@ -67,7 +72,7 @@ func main() {
 	softDeleteMsgUC := msguc.NewSoftDeleteUseCase(msgRepo)
 
 	// Friendship UseCases
-	sendReqUC := frienduc.NewSendRequestUseCase(friendRepo, userRepo, notifRepo)
+	sendReqUC := frienduc.NewSendRequestUseCase(friendRepo, userRepo, notifRepo, dbPool)
 	respondReqUC := frienduc.NewRespondRequestUseCase(dbPool, friendRepo, convRepo, notifRepo, userRepo)
 	unfriendUC := frienduc.NewUnfriendUseCase(friendRepo)
 	listFriendUC := frienduc.NewListUseCase(friendRepo, userRepo)
@@ -76,21 +81,40 @@ func main() {
 	listNotifUC := notifuc.NewListUseCase(notifRepo)
 	markNotifReadUC := notifuc.NewMarkReadUseCase(notifRepo)
 
+	// Upload UseCases
+	cldClient := cloudinary.NewClient(cloudinary.Config{
+		CloudName: cfg.Cloudinary.CloudName,
+		APIKey:    cfg.Cloudinary.APIKey,
+		APISecret: cfg.Cloudinary.APISecret,
+	})
+	r2Client, err := r2.NewClient(r2.Config{
+		AccountID:       cfg.R2.AccountID,
+		AccessKeyID:     cfg.R2.AccessKeyID,
+		SecretAccessKey: cfg.R2.SecretAccessKey,
+		BucketName:      cfg.R2.BucketName,
+	})
+	if err != nil {
+		log.Fatalf("cannot init r2 client: %v", err)
+	}
+	uploadUC := uploaduc.NewUsecase(cldClient, r2Client, convRepo)
+
 	// 6. Init WebSocket Hub
-	hub := ws.NewHub(cfg.Database.ListenURL)
+
+	hub := ws.NewHub(cfg.Database.ListenURL, dbPool)
 	hub.Run()
 
 	// 7. Init Handlers
 	authHandler := router_http.NewAuthHandler(registerUC, loginUC, refreshUC, logoutUC)
 	userHandler := router_http.NewUserHandler(userRepo)
-	convHandler := router_http.NewConversationHandler(listConvUC, createGroupUC, markReadUC)
+	convHandler := router_http.NewConversationHandler(listConvUC, getConvUC, createGroupUC, markReadUC, kickMemberUC)
 	msgHandler := router_http.NewMessageHandler(sendMsgUC, listMsgUC, softDeleteMsgUC)
 	friendHandler := router_http.NewFriendHandler(sendReqUC, respondReqUC, unfriendUC, listFriendUC)
 	notifHandler := router_http.NewNotificationHandler(listNotifUC, markNotifReadUC)
 	wsHandler := ws.NewHandler(hub, cfg)
+	uploadHandler := router_http.NewUploadHandler(uploadUC)
 
 	// 8. Init Router
-	r := router_http.NewRouter(cfg, authHandler, userHandler, convHandler, msgHandler, friendHandler, notifHandler, wsHandler)
+	r := router_http.NewRouter(cfg, authHandler, userHandler, convHandler, msgHandler, friendHandler, notifHandler, wsHandler, uploadHandler)
 
 	// 9. Start HTTP Server with Graceful Shutdown
 	srv := &http.Server{

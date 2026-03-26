@@ -145,6 +145,82 @@ func (q *Queries) GetConversationByID(ctx context.Context, id pgtype.UUID) (GetC
 	return i, err
 }
 
+const getConversationDetails = `-- name: GetConversationDetails :one
+SELECT
+    c.id,
+    c.type,
+    c.name,
+    c.avatar_url,
+    c.last_activity_at,
+    COUNT(m_unread.id) AS unread_count,
+    -- Thông tin other_user cho DM
+    CASE 
+        WHEN c.type = 'DM' THEN (
+            SELECT cp2.user_id 
+            FROM conversation_participants cp2 
+            WHERE cp2.conversation_id = c.id 
+            AND cp2.user_id != $1 
+            AND cp2.left_at IS NULL
+            LIMIT 1
+        )
+    END AS other_user_id,
+    -- Friendship status cho DM
+    CASE
+        WHEN c.type = 'DM' THEN (
+            SELECT f.status
+            FROM friendships f
+            WHERE (f.requester_id = $1 AND f.addressee_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            )) OR (f.addressee_id = $1 AND f.requester_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            ))
+            LIMIT 1
+        )
+    END AS friendship_status
+FROM conversations c
+LEFT JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1
+LEFT JOIN messages m_unread ON 
+    m_unread.conversation_id = c.id
+    AND m_unread.deleted_at IS NULL
+    AND m_unread.sender_id != $1
+    AND m_unread.created_at > COALESCE(cp.last_read_at, '1970-01-01')
+WHERE c.id = $2
+GROUP BY c.id
+`
+
+type GetConversationDetailsParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+type GetConversationDetailsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	Type             string             `json:"type"`
+	Name             pgtype.Text        `json:"name"`
+	AvatarUrl        pgtype.Text        `json:"avatar_url"`
+	LastActivityAt   pgtype.Timestamptz `json:"last_activity_at"`
+	UnreadCount      int64              `json:"unread_count"`
+	OtherUserID      interface{}        `json:"other_user_id"`
+	FriendshipStatus interface{}        `json:"friendship_status"`
+}
+
+// Lấy chi tiết conversation với unread count và friendship status
+func (q *Queries) GetConversationDetails(ctx context.Context, arg GetConversationDetailsParams) (GetConversationDetailsRow, error) {
+	row := q.db.QueryRow(ctx, getConversationDetails, arg.UserID, arg.ID)
+	var i GetConversationDetailsRow
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.Name,
+		&i.AvatarUrl,
+		&i.LastActivityAt,
+		&i.UnreadCount,
+		&i.OtherUserID,
+		&i.FriendshipStatus,
+	)
+	return i, err
+}
+
 const getConversationParticipants = `-- name: GetConversationParticipants :many
 SELECT 
     cp.id,
@@ -284,7 +360,7 @@ SELECT
     u_last.display_name AS last_message_sender_name,
     u_last.avatar_url AS last_message_sender_avatar,
     COUNT(m_unread.id) AS unread_count,
-    -- Thông tin other_user cho DM (sẽ được xử lý ở application layer)
+    -- Thông tin other_user cho DM
     CASE 
         WHEN c.type = 'DM' THEN (
             SELECT cp2.user_id 
@@ -294,7 +370,20 @@ SELECT
             AND cp2.left_at IS NULL
             LIMIT 1
         )
-    END AS other_user_id
+    END AS other_user_id,
+    -- Friendship status cho DM
+    CASE
+        WHEN c.type = 'DM' THEN (
+            SELECT f.status
+            FROM friendships f
+            WHERE (f.requester_id = $1 AND f.addressee_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            )) OR (f.addressee_id = $1 AND f.requester_id = (
+                SELECT cp2.user_id FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1
+            ))
+            LIMIT 1
+        )
+    END AS friendship_status
 FROM conversation_participants cp
 JOIN conversations c ON c.id = cp.conversation_id
 LEFT JOIN messages m_last ON m_last.id = c.last_message_id
@@ -336,6 +425,7 @@ type ListConversationsByUserRow struct {
 	LastMessageSenderAvatar pgtype.Text        `json:"last_message_sender_avatar"`
 	UnreadCount             int64              `json:"unread_count"`
 	OtherUserID             interface{}        `json:"other_user_id"`
+	FriendshipStatus        interface{}        `json:"friendship_status"`
 }
 
 // Lấy danh sách conversations của user với unread count và last message
@@ -369,6 +459,7 @@ func (q *Queries) ListConversationsByUser(ctx context.Context, arg ListConversat
 			&i.LastMessageSenderAvatar,
 			&i.UnreadCount,
 			&i.OtherUserID,
+			&i.FriendshipStatus,
 		); err != nil {
 			return nil, err
 		}

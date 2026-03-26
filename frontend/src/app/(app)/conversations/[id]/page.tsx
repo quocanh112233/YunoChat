@@ -75,6 +75,8 @@ export default function ConversationPage() {
 
   if (!conversation) return null;
 
+  const isReadOnly = conversation.type === 'DM' && conversation.friendship_status !== 'ACCEPTED';
+
   return (
     <div className="flex flex-col h-full bg-slate-900 shadow-2xl overflow-hidden">
       <ConversationHeader conversation={conversation} />
@@ -86,6 +88,7 @@ export default function ConversationPage() {
       <MessageInput 
         conversationId={conversationId} 
         onSendMessage={handleSendMessage} 
+        isReadOnly={isReadOnly}
       />
     </div>
   );

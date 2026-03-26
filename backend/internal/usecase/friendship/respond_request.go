@@ -2,7 +2,9 @@ package friendship
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 
 	"backend/internal/domain/user"
 	"backend/internal/repository/postgres"
@@ -177,6 +179,22 @@ func (uc *RespondRequestUseCase) Execute(ctx context.Context, req RespondRequest
 		return nil, err
 	}
 
+	// Broadcast via WS
+	payload := map[string]interface{}{
+		"type": "notification_new",
+		"data": map[string]interface{}{
+			"type":         "FRIEND_ACCEPTED",
+			"reference_id": pgToUUID(friendship.ID).String(),
+			"actor_id":     req.UserID.String(),
+		},
+		"recipient_ids": []string{pgToUUID(friendship.RequesterID).String()},
+	}
+	jsonPayload, _ := json.Marshal(payload)
+	_, err = uc.pool.Exec(ctx, "SELECT pg_notify('chat_events', $1)", string(jsonPayload))
+	if err != nil {
+		log.Printf("Error sending friend accepted notification: %v", err)
+	}
+
 	// Get friend info
 	friendUser, err := uc.userRepo.FindByID(ctx, requesterID)
 	if err != nil {
@@ -198,4 +216,9 @@ func (uc *RespondRequestUseCase) Execute(ctx context.Context, req RespondRequest
 			AvatarURL:   friendUser.AvatarURL,
 		},
 	}, nil
+}
+
+// Helper to convert pgtype.UUID to uuid.UUID
+func pgToUUID(p pgtype.UUID) uuid.UUID {
+	return p.Bytes
 }

@@ -36,19 +36,21 @@ type Querier interface {
 	FindUserByUsername(ctx context.Context, username string) (User, error)
 	// Lấy chi tiết conversation theo ID
 	GetConversationByID(ctx context.Context, id pgtype.UUID) (GetConversationByIDRow, error)
+	// Lấy chi tiết conversation với unread count và friendship status
+	GetConversationDetails(ctx context.Context, arg GetConversationDetailsParams) (GetConversationDetailsRow, error)
 	// Lấy danh sách participants của conversation
 	GetConversationParticipants(ctx context.Context, conversationID pgtype.UUID) ([]GetConversationParticipantsRow, error)
 	GetFriendshipBetweenUsers(ctx context.Context, arg GetFriendshipBetweenUsersParams) (Friendship, error)
 	GetFriendshipByID(ctx context.Context, id pgtype.UUID) (Friendship, error)
 	// Kiểm tra status friendship giữa 2 users
 	GetFriendshipStatus(ctx context.Context, arg GetFriendshipStatusParams) (string, error)
-	// Lấy ID của tin nhắn mới nhất trong conversation
+	// Lấy ID của tin nhắn mới nhất (không bao gồm deleted)
 	GetLatestMessageID(ctx context.Context, conversationID pgtype.UUID) (pgtype.UUID, error)
 	// Lấy message theo ID (không bao gồm deleted)
 	GetMessageByID(ctx context.Context, id pgtype.UUID) (GetMessageByIDRow, error)
 	GetNotificationByID(ctx context.Context, id pgtype.UUID) (Notification, error)
 	GetNotificationByReference(ctx context.Context, arg GetNotificationByReferenceParams) (Notification, error)
-	// Đếm số tin nhắn chưa đọc trong conversation cho user cụ thể
+	// Đếm số tin nhắn chưa đọc trong conversation (không bao gồm deleted)
 	GetUnreadCount(ctx context.Context, arg GetUnreadCountParams) (int64, error)
 	GetUnreadNotificationCount(ctx context.Context, recipientID pgtype.UUID) (int64, error)
 	// Kiểm tra user có phải member của conversation không

@@ -35,7 +35,6 @@ FROM messages m
 JOIN users u ON u.id = m.sender_id
 LEFT JOIN attachments a ON a.message_id = m.id
 WHERE m.conversation_id = $1
-    AND m.deleted_at IS NULL
     AND (
         $2::timestamptz IS NULL OR $3::uuid IS NULL
         OR (m.created_at, m.id) < ($2, $3)
@@ -82,7 +81,7 @@ SELECT
 FROM messages m
 JOIN users u ON u.id = m.sender_id
 LEFT JOIN attachments a ON a.message_id = m.id
-WHERE m.id = $1 AND m.deleted_at IS NULL;
+WHERE m.id = $1;
 
 -- name: UpdateMessageStatus :exec
 -- Cập nhật status của message (SENT -> DELIVERED -> READ)
@@ -104,7 +103,7 @@ RETURNING id, message_id, storage_type, file_type, url, thumbnail_url,
     original_name, mime_type, size_bytes, width, height, duration_secs, created_at;
 
 -- name: GetUnreadCount :one
--- Đếm số tin nhắn chưa đọc trong conversation cho user cụ thể
+-- Đếm số tin nhắn chưa đọc trong conversation (không bao gồm deleted)
 SELECT COUNT(*)
 FROM messages m
 WHERE m.conversation_id = $1
@@ -117,7 +116,7 @@ WHERE m.conversation_id = $1
     );
 
 -- name: GetLatestMessageID :one
--- Lấy ID của tin nhắn mới nhất trong conversation
+-- Lấy ID của tin nhắn mới nhất (không bao gồm deleted)
 SELECT id FROM messages
 WHERE conversation_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC

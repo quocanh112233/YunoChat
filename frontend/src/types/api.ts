@@ -29,6 +29,7 @@ export interface Conversation {
   last_message_id?: string;
   last_activity_at: string;
   member_count?: number; // Added for group info
+  friendship_status?: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'BLOCKED' | null;
   created_at: string;
 }
 

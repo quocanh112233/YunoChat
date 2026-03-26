@@ -12,20 +12,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins in development
-		// In production, this should check against allowed origins
-		return true
-	},
-}
-
 // Handler handles WebSocket upgrade requests
 type Handler struct {
-	hub       *Hub
-	jwtSecret string
+	hub            *Hub
+	jwtSecret      string
+	upgrader       websocket.Upgrader
+	allowedOrigins []string
 }
 
 // NewHandler creates a new WebSocket handler
@@ -33,6 +25,28 @@ func NewHandler(hub *Hub, cfg *config.Config) *Handler {
 	return &Handler{
 		hub:       hub,
 		jwtSecret: cfg.JWT.AccessSecret,
+		allowedOrigins: cfg.Server.AllowedOrigins,
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true // Allow requests with no Origin header (e.g. some apps/tools)
+				}
+
+				// If "*" is in allowed origins, allow all
+				for _, allowed := range cfg.Server.AllowedOrigins {
+					if allowed == "*" {
+						return true
+					}
+					if allowed == origin {
+						return true
+					}
+				}
+				return false
+			},
+		},
 	}
 }
 
@@ -54,7 +68,7 @@ func (h *Handler) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upgrade HTTP connection to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		// Upgrade already writes error response
 		return

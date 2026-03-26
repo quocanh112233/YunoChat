@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useNotificationStore } from '@/store/notification';
 import { cn } from '@/lib/utils';
 import { usePathname } from 'next/navigation';
+import Link from 'next/link';
 import ConversationList from '../chat/ConversationList';
 import FriendList from '../friends/FriendList';
 import PendingRequests from '../friends/PendingRequests';
@@ -69,9 +70,11 @@ export default function Sidebar() {
                 </span>
               )}
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-800 hover:text-slate-100 transition-colors">
-              <Settings className="w-4.5 h-4.5" />
-            </Button>
+            <Link href="/settings">
+              <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-800 hover:text-slate-100 transition-colors">
+                <Settings className="w-4.5 h-4.5" />
+              </Button>
+            </Link>
             <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-800 hover:text-rose-400 transition-colors" onClick={() => clearAuth()}>
               <LogOut className="w-4.5 h-4.5" />
             </Button>

@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -40,13 +42,16 @@ type Hub struct {
 	listenConn *pgx.Conn
 	dbURL      string
 
+	// DB pool for friendship checks and other queries
+	pool *pgxpool.Pool
+
 	// Context for shutting down
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
 // NewHub creates a new Hub instance
-func NewHub(dbListenURL string) *Hub {
+func NewHub(dbListenURL string, pool *pgxpool.Pool) *Hub {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Hub{
 		clients:      make(map[uuid.UUID][]*Client),
@@ -54,9 +59,71 @@ func NewHub(dbListenURL string) *Hub {
 		unregister:   make(chan *Client),
 		gracePeriods: make(map[uuid.UUID]*time.Timer),
 		dbURL:        dbListenURL,
+		pool:         pool,
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+}
+
+// IsFriends checks if two users are friends (friendship.status = ACCEPTED)
+func (h *Hub) IsFriends(ctx context.Context, userA, userB uuid.UUID) bool {
+	if h.pool == nil {
+		return true // fallback: allow if no DB (should not happen in prod)
+	}
+	var status string
+	err := h.pool.QueryRow(ctx,
+		`SELECT status FROM friendships
+		 WHERE (requester_id = $1 AND addressee_id = $2)
+		    OR (requester_id = $2 AND addressee_id = $1)
+		 LIMIT 1`,
+		userA, userB,
+	).Scan(&status)
+	if err != nil {
+		return false
+	}
+	return status == "ACCEPTED"
+}
+
+// GetConversationParticipants returns user IDs of conversation participants (excluding caller)
+func (h *Hub) GetConversationParticipants(ctx context.Context, conversationID string, excludeUserID uuid.UUID) []uuid.UUID {
+	if h.pool == nil {
+		return nil
+	}
+	rows, err := h.pool.Query(ctx,
+		`SELECT user_id FROM conversation_participants
+		 WHERE conversation_id = $1
+		   AND left_at IS NULL
+		   AND user_id != $2`,
+		conversationID, excludeUserID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var result []uuid.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err == nil {
+			result = append(result, id.Bytes)
+		}
+	}
+	return result
+}
+
+// IsMember checks if a user is a member of a conversation
+func (h *Hub) IsMember(ctx context.Context, conversationID string, userID uuid.UUID) bool {
+	if h.pool == nil {
+		return true
+	}
+	var exists bool
+	err := h.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM conversation_participants
+			WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL
+		)`,
+		conversationID, userID,
+	).Scan(&exists)
+	return err == nil && exists
 }
 
 // Run starts the Hub's goroutines
@@ -87,8 +154,27 @@ func (h *Hub) addClient(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// Update DB status to ONLINE
+	if h.pool != nil {
+		_, err := h.pool.Exec(context.Background(),
+			"UPDATE users SET status = 'ONLINE' WHERE id = $1",
+			client.userID,
+		)
+		if err != nil {
+			log.Printf("Error updating user status to ONLINE: %v", err)
+		}
+	}
+
 	h.clients[client.userID] = append(h.clients[client.userID], client)
-	log.Printf("Client registered: userID=%s, total connections=%d", client.userID, len(h.clients[client.userID]))
+	count := len(h.clients[client.userID])
+	h.mu.Unlock()
+
+	log.Printf("Client registered: userID=%s, total connections=%d", client.userID, count)
+
+	// Broadcast presence update (only if first connection)
+	if count == 1 {
+		h.broadcastPresence(client.userID, "ONLINE")
+	}
 }
 
 // removeClient removes a client from the hub
@@ -138,6 +224,17 @@ func (h *Hub) startGracePeriod(userID uuid.UUID) {
 
 	// Start new grace period timer
 	timer := time.AfterFunc(gracePeriodDuration, func() {
+		// Update DB status to OFFLINE
+		if h.pool != nil {
+			_, err := h.pool.Exec(context.Background(),
+				"UPDATE users SET status = 'OFFLINE', last_seen_at = NOW() WHERE id = $1",
+				userID,
+			)
+			if err != nil {
+				log.Printf("Error updating user status to OFFLINE: %v", err)
+			}
+		}
+
 		h.broadcastPresence(userID, "OFFLINE")
 		h.gpMu.Lock()
 		delete(h.gracePeriods, userID)
@@ -291,7 +388,7 @@ func (h *Hub) dispatch(rawPayload string) {
 	}
 
 	// Send to recipients
-	if event.RecipientIDs != nil && len(event.RecipientIDs) > 0 {
+	if len(event.RecipientIDs) > 0 {
 		// Send to specific recipients
 		for _, recipientID := range event.RecipientIDs {
 			userID, err := uuid.Parse(recipientID)
@@ -323,6 +420,7 @@ func (h *Hub) sendToUser(userID uuid.UUID, data []byte) {
 }
 
 // Close gracefully shuts down the Hub
+// It closes all client send channels, which triggers their writePumps to send close frames.
 func (h *Hub) Close() error {
 	log.Println("Closing WebSocket Hub...")
 
@@ -334,12 +432,13 @@ func (h *Hub) Close() error {
 		h.listenConn.Close(context.Background())
 	}
 
-	// Close all client connections
+	// Close all client send channels
 	h.mu.Lock()
 	for userID, clients := range h.clients {
 		for _, client := range clients {
+			// We only close the channel. The writePump will see this,
+			// send the CloseMessage and then close the connection.
 			close(client.send)
-			client.conn.Close()
 		}
 		delete(h.clients, userID)
 	}
@@ -367,4 +466,123 @@ func (h *Hub) GetClientCount() int {
 		count += len(clients)
 	}
 	return count
+}
+
+func (h *Hub) handleMarkRead(userID string, conversationID string) {
+	// Update DB last_read_at
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	userUUID, _ := uuid.Parse(userID)
+	convUUID, _ := uuid.Parse(conversationID)
+
+	userPgID := pgtype.UUID{Bytes: userUUID, Valid: true}
+	convPgID := pgtype.UUID{Bytes: convUUID, Valid: true}
+
+	_, err := h.pool.Exec(ctx,
+		"UPDATE conversation_participants SET last_read_at = NOW() WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL",
+		convPgID, userPgID,
+	)
+	if err != nil {
+		log.Printf("Error updating last_read_at: %v", err)
+		return
+	}
+
+	// Get latest message ID for read receipt
+	var lastMsgID pgtype.UUID
+	err = h.pool.QueryRow(ctx,
+		"SELECT id FROM messages WHERE conversation_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+		convPgID,
+	).Scan(&lastMsgID)
+
+	if err == nil && lastMsgID.Valid {
+		// Broadcast read receipt to other participants
+		participants, _ := h.getParticipants(ctx, convPgID)
+		recipientIDs := make([]string, 0, len(participants))
+		for _, p := range participants {
+			pID, _ := uuid.FromBytes(p.Bytes[:])
+			if pID.String() != userID {
+				recipientIDs = append(recipientIDs, pID.String())
+			}
+		}
+
+		if len(recipientIDs) > 0 {
+			msgID, _ := uuid.FromBytes(lastMsgID.Bytes[:])
+			event := map[string]interface{}{
+				"type": "read_receipt",
+				"data": map[string]interface{}{
+					"conversation_id":      conversationID,
+					"reader_id":            userID,
+					"last_read_message_id": msgID.String(),
+					"read_at":              time.Now().Format(time.RFC3339),
+				},
+				"recipient_ids": recipientIDs,
+			}
+			h.broadcastEvent(event)
+		}
+	}
+}
+
+func (h *Hub) handleTyping(userID string, conversationID string, isTyping bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	convUUID, _ := uuid.Parse(conversationID)
+	convPgID := pgtype.UUID{Bytes: convUUID, Valid: true}
+
+	// Get participants to broadcast
+	participants, _ := h.getParticipants(ctx, convPgID)
+	recipientIDs := make([]string, 0, len(participants))
+	for _, p := range participants {
+		pID, _ := uuid.FromBytes(p.Bytes[:])
+		if pID.String() != userID {
+			recipientIDs = append(recipientIDs, pID.String())
+		}
+	}
+
+	if len(recipientIDs) > 0 {
+		// Get user info for typing indicator
+		var displayName string
+		_ = h.pool.QueryRow(ctx, "SELECT display_name FROM users WHERE id = $1", pgtype.UUID{Bytes: uuid.MustParse(userID), Valid: true}).Scan(&displayName)
+
+		event := map[string]interface{}{
+			"type": "user_typing",
+			"data": map[string]interface{}{
+				"conversation_id": conversationID,
+				"user": map[string]interface{}{
+					"id":           userID,
+					"display_name": displayName,
+				},
+				"is_typing": isTyping,
+			},
+			"recipient_ids": recipientIDs,
+		}
+		h.broadcastEvent(event)
+	}
+}
+
+func (h *Hub) getParticipants(ctx context.Context, convID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := h.pool.Query(ctx, "SELECT user_id FROM conversation_participants WHERE conversation_id = $1 AND left_at IS NULL", convID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (h *Hub) broadcastEvent(event map[string]interface{}) {
+	jsonPayload, _ := json.Marshal(event)
+	_, err := h.pool.Exec(context.Background(), "SELECT pg_notify('chat_events', $1)", string(jsonPayload))
+	if err != nil {
+		log.Printf("Error broadcasting event: %v", err)
+	}
 }
